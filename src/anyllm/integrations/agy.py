@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from .base import CLIIntegration, COMMANDS
+from .base import CLIIntegration, SCOPE_GLOBAL
 
 
 def _agy_config_dir() -> Path:
@@ -15,23 +15,18 @@ def _agy_config_dir() -> Path:
 
 
 class AgyIntegration(CLIIntegration):
-    """Agy AI coding CLI — installs markdown commands in the agy commands directory."""
+    """Agy AI coding CLI — <agy-config>/commands/<name>.md"""
 
     name = "Agy"
     key = "agy"
+    command_style = "slash"
     binaries = ["agy"]
     config_dirs = [_agy_config_dir()]
 
     @property
-    def install_dir(self) -> Optional[Path]:
+    def global_install_dir(self) -> Optional[Path]:
         return _agy_config_dir() / "commands"
 
-    def _render_command(self, slug: str, cmd: str, description: str) -> tuple[str, str]:
-        filename = f"{slug}.md"
-        content = (
-            f"---\n"
-            f"description: {description}\n"
-            f"---\n"
-            f"!`{cmd}`\n"
-        )
-        return filename, content
+    def _render_command(self, slug: str, cmd: str, description: str, scope: str = SCOPE_GLOBAL) -> tuple[str, str]:
+        content = f"---\ndescription: {description}\n---\n!`{cmd}`\n"
+        return f"{slug}.md", content

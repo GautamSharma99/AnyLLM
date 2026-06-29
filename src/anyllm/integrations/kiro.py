@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from .base import CLIIntegration, COMMANDS, _write_file
+from .base import CLIIntegration, SCOPE_GLOBAL
 
 
 _STEERING_TEMPLATE = """\
@@ -11,7 +11,7 @@ _STEERING_TEMPLATE = """\
 
 {description}
 
-When the user types `/{slug}`, run this shell command and show the output:
+When the user types `/{slug}`, run this command and show the output:
 
 ```bash
 {cmd}
@@ -20,21 +20,20 @@ When the user types `/{slug}`, run this shell command and show the output:
 
 
 class KiroIntegration(CLIIntegration):
-    """AWS Kiro — installs as steering documents in ~/.kiro/steering/"""
+    """AWS Kiro — ~/.kiro/steering/<name>.md"""
 
     name = "Kiro"
     key = "kiro"
+    command_style = "slash"
     binaries = ["kiro"]
     config_dirs = [Path.home() / ".kiro"]
 
     @property
-    def install_dir(self) -> Optional[Path]:
-        # Kiro uses ~/.kiro/steering/ for custom instructions
+    def global_install_dir(self) -> Optional[Path]:
         if self.detect():
             return Path.home() / ".kiro" / "steering"
         return None
 
-    def _render_command(self, slug: str, cmd: str, description: str) -> tuple[str, str]:
-        filename = f"{slug}.md"
+    def _render_command(self, slug: str, cmd: str, description: str, scope: str = SCOPE_GLOBAL) -> tuple[str, str]:
         content = _STEERING_TEMPLATE.format(slug=slug, cmd=cmd, description=description)
-        return filename, content
+        return f"{slug}.md", content

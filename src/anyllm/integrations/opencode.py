@@ -4,36 +4,37 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from .base import CLIIntegration, COMMANDS
+from .base import CLIIntegration, SCOPE_GLOBAL, SCOPE_PROJECT, IntegrationStatus
 
 
-def _opencode_config_dir() -> Path:
-    """Return the opencode config directory (XDG on Linux/Mac, .config on Windows)."""
-    # opencode follows XDG_CONFIG_HOME
+def _global_dir() -> Path:
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
-        return Path(xdg) / "opencode"
-    return Path.home() / ".config" / "opencode"
+        return Path(xdg) / "opencode" / "commands"
+    return Path.home() / ".config" / "opencode" / "commands"
 
 
 class OpenCodeIntegration(CLIIntegration):
-    """OpenCode (sst.dev) — installs markdown commands in ~/.config/opencode/commands/"""
+    """OpenCode (sst.dev).
+
+    Global scope  → ~/.config/opencode/commands/<name>.md
+    Project scope → .opencode/commands/<name>.md
+    """
 
     name = "OpenCode"
     key = "opencode"
+    command_style = "slash"
     binaries = ["opencode"]
-    config_dirs = [_opencode_config_dir()]
+    config_dirs = [Path.home() / ".config" / "opencode"]
 
     @property
-    def install_dir(self) -> Optional[Path]:
-        return _opencode_config_dir() / "commands"
+    def global_install_dir(self) -> Optional[Path]:
+        return _global_dir()
 
-    def _render_command(self, slug: str, cmd: str, description: str) -> tuple[str, str]:
-        filename = f"{slug}.md"
-        content = (
-            f"---\n"
-            f"description: {description}\n"
-            f"---\n"
-            f"!`{cmd}`\n"
-        )
-        return filename, content
+    @property
+    def project_install_dir(self) -> Optional[Path]:
+        return Path.cwd() / ".opencode" / "commands"
+
+    def _render_command(self, slug: str, cmd: str, description: str, scope: str = SCOPE_GLOBAL) -> tuple[str, str]:
+        content = f"---\ndescription: {description}\n---\n!`{cmd}`\n"
+        return f"{slug}.md", content

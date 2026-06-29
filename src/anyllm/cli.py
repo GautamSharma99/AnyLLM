@@ -580,29 +580,43 @@ def push() -> None:
 
 @app.command("integrations")
 def integrations_cmd() -> None:
-    """Show status of all supported CLI integrations."""
+    """Show detected/installed status of all supported CLI integrations."""
     from .integrations import ALL_INTEGRATIONS
 
     console.print("[bold]CLI integrations:[/bold]\n")
     for integration in ALL_INTEGRATIONS:
         st = integration.status()
-        detected_icon = "[green]✓[/green]" if st.detected else "[dim]✗[/dim]"
-        installed_icon = "[green]✓ installed[/green]" if st.installed else "[dim]not installed[/dim]"
-        dir_hint = f"  [dim]{st.install_dir}[/dim]" if st.install_dir and st.installed else ""
-        console.print(f"  {detected_icon} [bold]{st.name}[/bold] ({st.key}) — {installed_icon}{dir_hint}")
+        det = "[green]✓[/green]" if st.detected else "[dim]✗[/dim]"
+
+        parts: list[str] = []
+        if st.global_installed:
+            parts.append(f"[green]✓ global[/green] [dim]({st.global_dir})[/dim]")
+        if st.project_installed:
+            parts.append(f"[green]✓ project[/green] [dim]({st.project_dir})[/dim]")
+        if not parts:
+            parts.append("[dim]not installed[/dim]")
+
+        status_str = "  ".join(parts)
+        console.print(f"  {det} [bold]{st.name}[/bold] ({st.key}) — {status_str}")
 
 
 @app.command()
-def install(
+def integrate(
     name: Optional[str] = typer.Argument(
         None,
-        help="Integration to install (claude, codex, opencode, agy, kiro, kilo, cursor). "
-             "Omit to install all detected.",
+        help="Integration key (claude, gemini, codex, opencode, agy, kiro, kilo, cursor). "
+             "Omit to integrate all detected.",
     ),
-    all: bool = typer.Option(False, "--all", help="Install all detected integrations."),
+    all: bool = typer.Option(False, "--all", help="Integrate all detected CLIs."),
+    global_scope: bool = typer.Option(True, "--global/--no-global", help="Install to user config dirs (default)."),
+    project_scope: bool = typer.Option(False, "--project", help="Install to project-relative dirs."),
 ) -> None:
-    """Install anyllm slash commands into supported AI coding CLIs."""
-    from .integrations import ALL_INTEGRATIONS, detect_all, get_integration
+    """Install anyllm commands into supported AI coding CLIs."""
+    from .integrations import ALL_INTEGRATIONS, get_integration
+    from .integrations.base import SCOPE_GLOBAL, SCOPE_PROJECT
+    from .integrations.detector import detect_all
+
+    scope = SCOPE_PROJECT if project_scope else SCOPE_GLOBAL
 
     if name:
         integration = get_integration(name)
@@ -612,37 +626,40 @@ def install(
             raise typer.Exit(code=2)
         targets = [integration]
     elif all:
-        targets = detect_all()
+        targets = detect_all(ALL_INTEGRATIONS)
         if not targets:
             console.print("[yellow]No supported CLIs detected on this machine.[/yellow]")
             raise typer.Exit(code=0)
         console.print(f"Detected: {', '.join(t.name for t in targets)}\n")
     else:
-        # No args: detect and offer to install all
-        detected = detect_all()
-        if not detected:
+        targets = detect_all(ALL_INTEGRATIONS)
+        if not targets:
             console.print("[yellow]No supported CLIs detected. Use --all or pass a name.[/yellow]")
             raise typer.Exit(code=0)
         console.print("Detected CLIs:")
-        for t in detected:
+        for t in targets:
             console.print(f"  [green]✓[/green] {t.name}")
         console.print()
-        targets = detected
 
+    scope_label = "project" if scope == SCOPE_PROJECT else "global"
     for integration in targets:
         try:
-            integration.install()
-            console.print(f"[green]✓[/green] {integration.name} integration installed")
+            integration.install(scope=scope)
+            console.print(f"[green]✓[/green] {integration.name} ({scope_label}) installed")
+        except RuntimeError as e:
+            err_console.print(f"[yellow]⚠[/yellow]  {integration.name}: {e}")
         except Exception as e:
             err_console.print(f"[red]✗[/red] {integration.name}: {e}")
 
 
 @app.command()
 def uninstall(
-    name: str = typer.Argument(..., help="Integration to uninstall (claude, codex, opencode, agy, kiro, kilo, cursor)."),
+    name: str = typer.Argument(..., help="Integration key to remove (claude, gemini, codex, opencode, agy, kiro, kilo, cursor)."),
+    project_scope: bool = typer.Option(False, "--project", help="Remove project-scope install instead of global."),
 ) -> None:
-    """Uninstall anyllm slash commands from a CLI integration."""
+    """Remove anyllm commands from a CLI integration."""
     from .integrations import ALL_INTEGRATIONS, get_integration
+    from .integrations.base import SCOPE_GLOBAL, SCOPE_PROJECT
 
     integration = get_integration(name)
     if integration is None:
@@ -650,9 +667,11 @@ def uninstall(
         err_console.print(f"[red]unknown integration:[/red] {name}. Available: {keys}")
         raise typer.Exit(code=2)
 
+    scope = SCOPE_PROJECT if project_scope else SCOPE_GLOBAL
     try:
-        integration.uninstall()
-        console.print(f"[green]✓[/green] {integration.name} integration removed")
+        integration.uninstall(scope=scope)
+        scope_label = "project" if project_scope else "global"
+        console.print(f"[green]✓[/green] {integration.name} ({scope_label}) removed")
     except Exception as e:
         err_console.print(f"[red]✗[/red] {integration.name}: {e}")
         raise typer.Exit(code=1)
