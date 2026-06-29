@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+push = ["pywin32>=306; sys_platform=='win32'"]
 
 [project.scripts]
 anyllm = "anyllm.cli:app"

@@ -12,3 +12,8 @@ merge:
   graphify_timeout: 30
   stale_threshold: 3
   auto_update_graph: true
+push:
+  browser: auto
+  codex_url: https://codex.openai.com
+  send_delay_ms: 500
+  open_if_missing: true

@@ -69,19 +69,23 @@ class ClaudeCodeIngestor:
             return []
         return sorted(slug_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
 
-    def latest_session(self, project_root: Path) -> NormalizedTranscript | None:
+    def latest_session(
+        self, project_root: Path, since_ts: str | None = None
+    ) -> NormalizedTranscript | None:
         files = self._session_files(project_root)
         if not files:
             return None
-        return self._normalize(files[-1])
+        return self._normalize(files[-1], since_ts=since_ts)
 
-    def session_by_id(self, project_root: Path, session_id: str) -> NormalizedTranscript | None:
+    def session_by_id(
+        self, project_root: Path, session_id: str, since_ts: str | None = None
+    ) -> NormalizedTranscript | None:
         for p in self._session_files(project_root):
             if p.stem == session_id:
-                return self._normalize(p)
+                return self._normalize(p, since_ts=since_ts)
         return None
 
-    def _normalize(self, jsonl_path: Path) -> NormalizedTranscript:
+    def _normalize(self, jsonl_path: Path, since_ts: str | None = None) -> NormalizedTranscript:
         turns: list[dict[str, Any]] = []
         files_touched: list[str] = []
         model: str | None = None
@@ -127,6 +131,9 @@ class ClaudeCodeIngestor:
                 if tool_calls:
                     turn["tool_calls"] = tool_calls
                 turns.append(turn)
+
+        if since_ts:
+            turns = [t for t in turns if t.get("ts", "") > since_ts]
 
         # Deduplicate files_touched preserving order.
         seen: set[str] = set()

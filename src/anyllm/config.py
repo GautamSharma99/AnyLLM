@@ -26,6 +26,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "stale_threshold": 3,
         "auto_update_graph": True,
     },
+    "push": {
+        "browser": "auto",
+        "codex_url": "https://codex.openai.com",
+        "send_delay_ms": 500,
+        "open_if_missing": True,
+    },
 }
 
 
@@ -40,6 +46,15 @@ class MergeConfig:
 
 
 @dataclass
+class PushConfig:
+    """Configuration for the push command (browser injection)."""
+    browser: str = "auto"
+    codex_url: str = "https://codex.openai.com"
+    send_delay_ms: int = 500
+    open_if_missing: bool = True
+
+
+@dataclass
 class Config:
     distiller_model: str = "gpt-4o-mini"
     budget_tokens: int = 2000
@@ -47,6 +62,7 @@ class Config:
     extra_rules: list[str] = field(default_factory=list)
     tone: str = "direct"
     merge: MergeConfig = field(default_factory=MergeConfig)
+    push: PushConfig = field(default_factory=PushConfig)
 
     @classmethod
     def load(cls, anyllm_dir: Path) -> "Config":
@@ -65,6 +81,13 @@ class Config:
             stale_threshold=int(merge_raw.get("stale_threshold", MergeConfig.stale_threshold)),
             auto_update_graph=bool(merge_raw.get("auto_update_graph", MergeConfig.auto_update_graph)),
         )
+        push_raw = raw.get("push", {})
+        push_cfg = PushConfig(
+            browser=str(push_raw.get("browser", PushConfig.browser)),
+            codex_url=str(push_raw.get("codex_url", PushConfig.codex_url)),
+            send_delay_ms=int(push_raw.get("send_delay_ms", PushConfig.send_delay_ms)),
+            open_if_missing=bool(push_raw.get("open_if_missing", PushConfig.open_if_missing)),
+        )
         return cls(
             distiller_model=distiller.get("model", cls.distiller_model),
             budget_tokens=int(distiller.get("budget_tokens", cls.budget_tokens)),
@@ -72,6 +95,7 @@ class Config:
             extra_rules=list(framing.get("extra_rules", []) or []),
             tone=framing.get("tone", cls.tone),
             merge=merge_cfg,
+            push=push_cfg,
         )
 
     @staticmethod
