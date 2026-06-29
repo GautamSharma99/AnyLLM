@@ -578,6 +578,47 @@ def push() -> None:
         raise typer.Exit(code=1)
 
 
+@app.command()
+def install() -> None:
+    """First-run setup: init .anyllm/ and install commands in all detected CLIs."""
+    from .integrations import ALL_INTEGRATIONS
+    from .integrations.base import SCOPE_GLOBAL
+    from .integrations.detector import detect_all
+
+    print_banner(console)
+
+    # Step 1: detect
+    detected = detect_all(ALL_INTEGRATIONS)
+    if detected:
+        console.print("[bold]Detected CLIs:[/bold]")
+        for i in detected:
+            console.print(f"  [green]✓[/green] {i.name}")
+        console.print()
+    else:
+        console.print("[yellow]No supported CLIs detected. You can add them later with `anyllm integrate`.[/yellow]\n")
+
+    # Step 2: init .anyllm/
+    root = Path.cwd()
+    paths = init_project(root)
+    if not paths.config_path.exists():
+        Config.write_default(paths.anyllm_dir)
+    console.print(f"[green]✓[/green] initialized {paths.anyllm_dir}")
+
+    # Step 3: install integrations
+    if detected:
+        console.print()
+        console.print("[bold]Installing integrations...[/bold]")
+        for integration in detected:
+            try:
+                integration.install(scope=SCOPE_GLOBAL)
+                console.print(f"[green]✓[/green] {integration.name} integration installed")
+            except Exception as e:
+                err_console.print(f"[red]✗[/red] {integration.name}: {e}")
+
+    console.print()
+    console.print("[green bold]Ready.[/green bold] Use [bold]/anyllm-pack[/bold] in any supported CLI.")
+
+
 @app.command("integrations")
 def integrations_cmd() -> None:
     """Show detected/installed status of all supported CLI integrations."""
