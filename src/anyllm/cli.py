@@ -8,6 +8,8 @@ from typing import Optional
 from dotenv import load_dotenv
 load_dotenv()
 
+import sys
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -34,28 +36,39 @@ from .storage import (
     write_transcript,
 )
 
+# On Windows, cp1252 can't render the unicode glyphs rich uses. Reconfigure
+# stdio to UTF-8 so output renders correctly.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 app = typer.Typer(
     help="Git for LLM context. Snapshot a session, brief the next LLM.",
     no_args_is_help=False,
     add_completion=False,
 )
-import sys as _sys
-# On Windows, the default console encoding (cp1252) can't render unicode
-# glyphs like → that rich's markup and our messages use. Reconfigure stdio
-# to UTF-8 so rich renders cleanly.
-for _stream in (_sys.stdout, _sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-    except Exception:
-        pass
 
 console = Console()
 err_console = Console(stderr=True)
 
+_INTEGRATION_KEYS = "claude, gemini, opencode, codex, kiro, kilo, cursor"
+
 
 def _paths() -> Paths:
     return Paths(root=find_project_root())
+
+
+def _require_paths() -> Paths:
+    """Return Paths, or exit with a clean message if .anyllm/ is missing."""
+    paths = _paths()
+    try:
+        ensure_initialized(paths)
+    except RuntimeError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=1)
+    return paths
 
 
 def _version_callback(value: bool):
@@ -94,7 +107,7 @@ def init() -> None:
 def pack(
     source: str = typer.Option(
         "claude-code", "--source", "-s",
-        help="Ingestor to use. MVP: claude-code.",
+        help="Ingestor to use (claude-code).",
     ),
     session_id: Optional[str] = typer.Option(
         None, "--session",
@@ -102,8 +115,7 @@ def pack(
     ),
 ) -> None:
     """Snapshot the current/most-recent LLM session into .anyllm/."""
-    paths = _paths()
-    ensure_initialized(paths)
+    paths = _require_paths()
     config = Config.load(paths.anyllm_dir)
 
     ingestor_cls = INGESTORS.get(source)
@@ -228,8 +240,7 @@ def prime(
     ),
 ) -> None:
     """Emit a copy-pasteable briefing for the next LLM."""
-    paths = _paths()
-    ensure_initialized(paths)
+    paths = _require_paths()
     config = Config.load(paths.anyllm_dir)
 
     if not paths.current_path.exists():
@@ -295,8 +306,7 @@ def prime(
 @app.command()
 def status() -> None:
     """Show what's in the current snapshot."""
-    paths = _paths()
-    ensure_initialized(paths)
+    paths = _require_paths()
     config = Config.load(paths.anyllm_dir)
 
     if not paths.current_path.exists():
@@ -368,8 +378,7 @@ def status() -> None:
 @app.command("log")
 def log_cmd() -> None:
     """Show session history packed into this project."""
-    paths = _paths()
-    ensure_initialized(paths)
+    paths = _require_paths()
     index = load_index(paths)
     sessions = index.get("sessions", [])
     if not sessions:
@@ -415,8 +424,7 @@ def log_cmd() -> None:
 @app.command()
 def diff(session_id: str = typer.Argument(..., help="Session id to inspect.")) -> None:
     """Show the snapshot of a single session."""
-    paths = _paths()
-    ensure_initialized(paths)
+    paths = _require_paths()
     index = load_index(paths)
     match = next(
         (e for e in index.get("sessions", []) if e.get("session_id") == session_id),
@@ -457,8 +465,7 @@ def repack(
     ),
 ) -> None:
     """Ingest turns missed since the last pack and merge them into current.md."""
-    paths = _paths()
-    ensure_initialized(paths)
+    paths = _require_paths()
     config = Config.load(paths.anyllm_dir)
 
     last_entry = get_last_pack_entry(paths)
@@ -563,8 +570,7 @@ def repack(
 @app.command()
 def push() -> None:
     """Paste the briefing into Codex and press Send — silent, no briefing text shown."""
-    paths = _paths()
-    ensure_initialized(paths)
+    paths = _require_paths()
     config = Config.load(paths.anyllm_dir)
 
     from .push import push as _push
@@ -616,7 +622,11 @@ def install() -> None:
                 err_console.print(f"[red]✗[/red] {integration.name}: {e}")
 
     console.print()
-    console.print("[green bold]Ready.[/green bold] Use [bold]/anyllm-pack[/bold] in any supported CLI.")
+    console.print(
+        "[green bold]Ready.[/green bold] "
+        "Type [bold]/anyllm-pack[/bold] in Claude Code, Codex, OpenCode, Kiro, or Kilocode. "
+        "In Antigravity/Agy, type [bold]anyllm-pack[/bold] as a message (no slash)."
+    )
 
 
 @app.command("integrations")
@@ -645,10 +655,9 @@ def integrations_cmd() -> None:
 def integrate(
     name: Optional[str] = typer.Argument(
         None,
-        help="Integration key (claude, gemini, codex, opencode, agy, kiro, kilo, cursor). "
-             "Omit to integrate all detected.",
+        help=f"Integration key ({_INTEGRATION_KEYS}). Omit to integrate all detected.",
     ),
-    all: bool = typer.Option(False, "--all", help="Integrate all detected CLIs."),
+    all_detected: bool = typer.Option(False, "--all", help="Integrate all detected CLIs."),
     global_scope: bool = typer.Option(True, "--global/--no-global", help="Install to user config dirs (default)."),
     project_scope: bool = typer.Option(False, "--project", help="Install to project-relative dirs."),
 ) -> None:
@@ -662,25 +671,15 @@ def integrate(
     if name:
         integration = get_integration(name)
         if integration is None:
-            keys = ", ".join(i.key for i in ALL_INTEGRATIONS)
-            err_console.print(f"[red]unknown integration:[/red] {name}. Available: {keys}")
+            err_console.print(f"[red]unknown integration:[/red] {name}. Available: {_INTEGRATION_KEYS}")
             raise typer.Exit(code=2)
         targets = [integration]
-    elif all:
-        targets = detect_all(ALL_INTEGRATIONS)
-        if not targets:
-            console.print("[yellow]No supported CLIs detected on this machine.[/yellow]")
-            raise typer.Exit(code=0)
-        console.print(f"Detected: {', '.join(t.name for t in targets)}\n")
     else:
         targets = detect_all(ALL_INTEGRATIONS)
         if not targets:
-            console.print("[yellow]No supported CLIs detected. Use --all or pass a name.[/yellow]")
+            console.print("[yellow]No supported CLIs detected. Pass a name or install a supported CLI.[/yellow]")
             raise typer.Exit(code=0)
-        console.print("Detected CLIs:")
-        for t in targets:
-            console.print(f"  [green]✓[/green] {t.name}")
-        console.print()
+        console.print(f"Detected: {', '.join(t.name for t in targets)}\n")
 
     scope_label = "project" if scope == SCOPE_PROJECT else "global"
     for integration in targets:
@@ -695,7 +694,7 @@ def integrate(
 
 @app.command()
 def uninstall(
-    name: str = typer.Argument(..., help="Integration key to remove (claude, gemini, codex, opencode, agy, kiro, kilo, cursor)."),
+    name: str = typer.Argument(..., help=f"Integration key to remove ({_INTEGRATION_KEYS})."),
     project_scope: bool = typer.Option(False, "--project", help="Remove project-scope install instead of global."),
 ) -> None:
     """Remove anyllm commands from a CLI integration."""
