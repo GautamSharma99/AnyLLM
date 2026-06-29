@@ -296,7 +296,7 @@ class MergeEngine:
         graph_query_fn: Any = None,
     ):
         self.stale_threshold = stale_threshold
-        # graph_query_fn(anchor: str) -> str  — returns EXTRACTED|INFERRED|AMBIGUOUS|MISSING
+        # graph_query_fn(anchor: str) -> str  — returns CONFIRMED|LIKELY|UNCERTAIN|MISSING
         self._graph_query = graph_query_fn
 
     def merge(
@@ -355,21 +355,21 @@ class MergeEngine:
             if graph_confidence:
                 old_d.confidence = graph_confidence
 
-            if graph_confidence == "EXTRACTED":
-                # Pinned by graph — confirmed even though absent from new snapshot
+            if graph_confidence == "CONFIRMED":
+                # Pinned by repository analysis — confirmed even though absent from new snapshot
                 old_d.sessions_absent = 0
                 if session_id and session_id not in old_d.sessions_confirmed:
                     old_d.sessions_confirmed.append(session_id)
                 confirmed.append(old_d)
-            elif graph_confidence == "INFERRED":
+            elif graph_confidence == "LIKELY":
                 stale.append(old_d)
-            elif graph_confidence in ("AMBIGUOUS", "MISSING"):
+            elif graph_confidence in ("UNCERTAIN", "MISSING"):
                 if old_d.sessions_absent >= self.stale_threshold:
                     orphaned.append(old_d)
                 else:
                     stale.append(old_d)
             else:
-                # No graph available — conservative fallback: STALE
+                # No repository context available — conservative fallback
                 if old_d.sessions_absent >= self.stale_threshold:
                     orphaned.append(old_d)
                 else:
@@ -479,7 +479,7 @@ class MergeEngine:
         fm["confidence_report"] = confidence_report
         fm["decision_provenance"] = decision_provenance
         if graph_path:
-            fm["graph_version"] = graph_path
+            fm["repository_context_path"] = graph_path
 
         fm_yaml = yaml.safe_dump(fm, sort_keys=False).rstrip()
         parts = [f"---\n{fm_yaml}\n---\n"]
@@ -552,7 +552,7 @@ class MergeEngine:
         if stale:
             stale_lines = [
                 "## Stale / Needs Verification",
-                "<!-- graphify confidence = INFERRED or AMBIGUOUS. Human or next model should verify. -->",
+                "<!-- Repository analysis confidence: LIKELY or UNCERTAIN. Human or next model should verify. -->",
             ]
             for d in stale:
                 conf_tag = f" | confidence: {d.confidence}" if d.confidence != "UNKNOWN" else ""

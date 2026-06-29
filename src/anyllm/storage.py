@@ -75,14 +75,23 @@ def save_index(paths: Paths, index: dict[str, Any]) -> None:
 
 def append_index_entry(paths: Paths, entry: dict[str, Any]) -> None:
     index = load_index(paths)
-    # De-duplicate by session_id + source: replace prior entry if present.
-    key = (entry.get("source"), entry.get("session_id"))
-    index["sessions"] = [
-        s for s in index.get("sessions", [])
-        if (s.get("source"), s.get("session_id")) != key
-    ]
+    # Repack entries are additive — never deduplicate them.
+    if entry.get("type") != "repack":
+        # De-duplicate by session_id + source: replace prior entry if present.
+        key = (entry.get("source"), entry.get("session_id"))
+        index["sessions"] = [
+            s for s in index.get("sessions", [])
+            if (s.get("source"), s.get("session_id")) != key
+        ]
     index["sessions"].append(entry)
     save_index(paths, index)
+
+
+def get_last_pack_entry(paths: Paths) -> dict[str, Any] | None:
+    """Return the most recent session entry from index.json, or None."""
+    index = load_index(paths)
+    sessions = index.get("sessions", [])
+    return sessions[-1] if sessions else None
 
 
 def session_basename(started_at: str, session_id: str) -> str:

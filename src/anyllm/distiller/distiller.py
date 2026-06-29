@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    import anthropic
+    import openai
 except ImportError:  # pragma: no cover
-    anthropic = None  # type: ignore[assignment]
+    openai = None  # type: ignore[assignment]
 
 
 PROMPT_VERSION = "v1"
@@ -61,42 +61,70 @@ def _short_input(inp: Any, limit: int = 160) -> str:
 class Distiller:
     def __init__(
         self,
-        model: str = "claude-sonnet-4-6",
+        model: str = "gpt-4o-mini",
         budget_tokens: int = 2000,
         api_key: str | None = None,
     ):
-        self.model = model
         self.budget_tokens = budget_tokens
-        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self._prompt = _load_prompt()
 
-    def distill(self, transcript: dict[str, Any], project: str) -> str:
+        openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+        openai_key = os.environ.get("OPENAI_API_KEY")
+
+        if openrouter_key:
+            self.api_key = openrouter_key
+            self._base_url: str | None = "https://openrouter.ai/api/v1"
+            self.model = os.environ.get("OPENROUTER_MODEL") or model
+        elif openai_key:
+            self.api_key = openai_key
+            self._base_url = None  # use OpenAI default
+            self.model = os.environ.get("OPENAI_MODEL") or model
+        else:
+            self.api_key = api_key
+            self._base_url = None
+            self.model = model
+
+    def distill(
+        self,
+        transcript: dict[str, Any],
+        project: str,
+        prompt_version: str | None = None,
+    ) -> str:
         """Return a markdown snapshot for the given normalized transcript."""
+        if prompt_version and prompt_version != PROMPT_VERSION:
+            alt_path = Path(__file__).parent / "prompts" / f"{prompt_version}.md"
+            prompt = alt_path.read_text() if alt_path.exists() else self._prompt
+        else:
+            prompt = self._prompt
+
         frontmatter = self._frontmatter(transcript, project)
+        if prompt_version:
+            frontmatter["prompt_version"] = prompt_version
         user_msg = self._user_message(transcript, project, frontmatter)
 
-        if not self.api_key or anthropic is None:
+        if not self.api_key or openai is None:
             # Offline fallback: produce a minimal hand-skeleton snapshot so the
             # pipeline still completes. Flagged as low-confidence everywhere.
             return self._offline_snapshot(frontmatter, transcript)
 
-        client = anthropic.Anthropic(api_key=self.api_key)
-        # Allow a generous output budget; the prompt itself asks the model to
-        # stay inside `budget_tokens` for the final primer.
+        kwargs: dict = {"api_key": self.api_key}
+        if self._base_url:
+            kwargs["base_url"] = self._base_url
+        client = openai.OpenAI(**kwargs)
         max_output = max(self.budget_tokens * 2, 1500)
         try:
-            resp = client.messages.create(
+            resp = client.chat.completions.create(
                 model=self.model,
                 max_tokens=max_output,
-                system=self._prompt,
-                messages=[{"role": "user", "content": user_msg}],
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_msg},
+                ],
             )
-        except Exception as e:  # surface the real cause
-            raise DistillerError(f"Anthropic API call failed: {e}") from e
+        except Exception as e:
+            raise DistillerError(f"OpenAI API call failed: {e}") from e
 
-        text = "".join(
-            block.text for block in resp.content if getattr(block, "type", None) == "text"
-        ).strip()
+        text = (resp.choices[0].message.content or "").strip()
 
         if not text.startswith("---"):
             # Model ignored format: splice our frontmatter on top.
@@ -151,14 +179,14 @@ class Distiller:
         code_map = "\n".join(f"- `{fp}` — touched during session" for fp in files) or "- (none)"
         body = (
             "# Task\n"
-            "Unknown — distiller ran offline (no ANTHROPIC_API_KEY).\n\n"
+            "Unknown — distiller ran offline (no OPENAI_API_KEY).\n\n"
             "# Status\n"
             "Transcript captured but not distilled. Run `anyllm pack` again with "
-            "`ANTHROPIC_API_KEY` set to generate a real briefing.\n\n"
+            "`OPENAI_API_KEY` set to generate a real briefing.\n\n"
             "# Decisions\n- (none extracted). _conf: low_\n\n"
             f"# Code map\n{code_map}\n\n"
             "# Tried & failed\n- (unknown without distillation)\n\n"
-            "# Next step\nSet ANTHROPIC_API_KEY and re-run `anyllm pack`.\n\n"
+            "# Next step\nSet OPENAI_API_KEY and re-run `anyllm pack`.\n\n"
             "# Open questions\n- (none)\n\n"
             "# Confidence Report\n"
             "- Overall: low\n"

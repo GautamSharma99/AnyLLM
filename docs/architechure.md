@@ -1,95 +1,49 @@
-# anyllm — Portable LLM Session Context
+# anyllm — Architecture
 
-> *Git for LLM context.* Snapshot a dying session, brief the next LLM in 30 seconds, anywhere.
-
----
-
-## 1. The Problem
-
-You're deep in a coding session with an LLM. Credits run out, the context window fills, the provider has an outage, or you simply want a second opinion from a different model. To keep going, you must:
-
-1. Open a different tool/session/provider.
-2. Re-explain the project, the task, what you've tried, what worked, what failed, the file layout, the decisions made, the open questions.
-3. Hope the new LLM doesn't go in circles re-doing work the old one already finished.
-
-This is a 10–30 minute tax every time. For a developer who hits this multiple times a week, it is the single biggest friction in LLM-assisted coding.
-
-## 2. The Insight
-
-The market is full of **memory systems for app builders** (mem0, Letta/MemGPT, Zep, LangChain memory). They are SDKs you embed in your *own* LLM app.
-
-Nobody owns the **developer-mid-task handoff** problem. The closest thing — Pieces — is heavyweight, closed, and captures everything indiscriminately.
-
-The opportunity is a small, sharp, open-source CLI with one job:
-
-> Take the *useful* state out of one LLM session and inject it cleanly into another, **regardless of provider**.
-
-The non-obvious hard part is **not storage**. It is:
-
-1. **Distillation** — compress a 50k-token transcript into a 2k-token primer that preserves task-resumption fidelity.
-2. **Instructional framing** — the output isn't a summary, it's a *briefing* that tells the next LLM what *not* to redo.
-3. **Confidence surfacing** — flag what the distiller is unsure about so the user (or next LLM) knows where to verify.
-4. **Provider adaptation** — Claude prefers structured/XML-ish, ChatGPT prefers markdown with explicit role framing, Cursor wants `.cursorrules`.
-5. **Incrementality** — every session appends a delta to a rolling project snapshot. Like git commits.
-
-## 3. Core Principles
-
-These are the rules that decide every design call. Memorize them.
-
-1. **Fidelity within budget.** Don't ship "accuracy over compression" — that just means pasting the transcript. Set a token budget; maximize task-resumption fidelity inside it.
-2. **The primer is a briefing, not a summary.** Output must be *instructional*. It tells the next LLM what to do, what's already done, and what *not* to redo.
-3. **Surface uncertainty.** If the distiller isn't sure, say so. Hidden uncertainty is how summary tools silently lie.
-4. **Local-first.** No cloud. Transcripts contain code and secrets. Everything stays on disk.
-5. **Boring, hand-editable formats.** Snapshots are markdown. Users can fix the distiller's mistakes manually. This is a feature.
-6. **Cross-provider from day one.** Within-provider continuity is what `MEMORY.md` and Cursor rules already give you for free. The product only matters if it crosses tools.
+> *Git for LLM context. Snapshot a dying session, brief the next LLM in 30 seconds.*
 
 ---
 
-## 4. The Product
+## Overview
 
-A CLI: `anyllm`.
+anyllm is a CLI tool that solves the LLM session handoff problem: when a session dies (context limit, credits, provider outage), you run `anyllm pack` + `anyllm prime` (or `anyllm push`), and keep going in the next tool — no re-explaining.
 
-```bash
-# Inside any project directory
-anyllm init                              # creates a .anyllm/ folder
-anyllm pack                              # snapshot the current/most-recent LLM session
-anyllm status                            # show what's in the current snapshot (token count, sections, confidence)
-anyllm prime --target chatgpt            # emit a copy-pasteable briefing
-anyllm prime --target chatgpt --copy     # ...and put it on the clipboard
-anyllm prime --target claude --write     # write a MEMORY.md-shaped file in place
-anyllm log                               # session history
-anyllm diff <session-id>                 # what that session added/changed
-```
+The core insight: the hard problem isn't storage, it's **distillation** (compressing 50k-token transcripts into 2k-token instructional briefings) and **cross-provider framing** (every target LLM has different formatting preferences).
 
-**One-line pitch:** *Your LLM session died. `anyllm pack`, `anyllm prime`, paste — keep going in any other tool.*
+Slash commands (`/anyllm-pack`, `/anyllm-repack`, etc.) are Claude Code-specific conveniences. The underlying `anyllm` CLI works in any terminal.
 
 ---
 
-## 5. Architecture
-
-### 5.1 The pipeline
+## Pipeline
 
 ```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│  Ingestor   │───▶│  Distiller  │───▶│   Storage   │───▶│  Composer   │───▶│   Adapter   │
-│ (per source)│    │   (LLM)     │    │   (.anyllm/)│    │ (framing)   │    │ (per target)│
-└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
-   raw transcript  → facts/decisions  → snapshot.md     → briefing JSON   → final primer
+┌──────────────┐   ┌────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+│   Ingestor   │──▶│  Distiller │──▶│   Storage    │──▶│   Composer   │──▶│   Adapter    │
+│ (per source) │   │   (LLM)    │   │  (.anyllm/)  │   │  (framing)   │   │ (per target) │
+└──────────────┘   └────────────┘   └──────────────┘   └──────────────┘   └──────────────┘
+  raw transcript  →  facts/decisions → snapshot.md    → briefing JSON   → final primer
 ```
 
-Five stages, each with one job. **Adding a new source = new ingestor. Adding a new target = new adapter.** The middle three never change.
+Five stages, each with one job. Adding a new source = new ingestor. Adding a new target = new adapter. The middle three never change.
 
-### 5.2 Stages
+Push adds a sixth stage (Injector) that delivers the primer directly to the target browser tab without printing it to the terminal.
 
-#### A. Ingestor — *get raw transcripts in*
+---
 
-Reads from one source, outputs a normalized transcript.
+## Stages
 
-- **MVP:** `claude-code` ingestor only. Reads JSONL transcripts from `~/.claude/projects/<project-slug>/*.jsonl`. Parses user/assistant turns, tool calls, file edits.
-- **Later:** `chatgpt` (export ZIPs), `cursor` (local SQLite), `clipboard` (paste-in fallback for any web LLM).
+### 1. Ingestor — `src/anyllm/ingestors/`
 
-Normalized transcript schema:
+Reads from one source, outputs a normalized `NormalizedTranscript`.
 
+**Implemented:** `claude-code` (`ingestors/claude_code.py`)
+- Reads JSONL transcripts from `~/.claude/projects/<project-slug>/*.jsonl`
+- Project slug: path with `/`, `\`, `:` replaced by `-` (handles Windows paths)
+- Parses user/assistant turns, tool calls (`Edit`, `Write`, `Read`, etc.), extracts files touched
+- Accumulates token counts from usage fields
+- **`since_ts` filter** — `latest_session(root, since_ts=)` and `session_by_id(root, id, since_ts=)` accept an ISO timestamp; turns at or before that timestamp are excluded. Used by `repack` to ingest only the delta since the last pack.
+
+**Normalized transcript schema:**
 ```json
 {
   "source": "claude-code",
@@ -101,267 +55,430 @@ Normalized transcript schema:
     { "role": "assistant", "text": "...", "tool_calls": [...], "ts": "..." }
   ],
   "files_touched": ["src/auth.py"],
-  "metadata": { "model": "claude-opus-4-7", "token_count": 48230 }
+  "metadata": { "model": "claude-sonnet-4-6", "token_count": 48230 }
 }
 ```
 
-This normalization is what lets every downstream stage be source-agnostic.
+**Planned:** `chatgpt` (export ZIPs), `cursor` (SQLite), `clipboard` (paste-in fallback).
 
-#### B. Distiller — *the brain*
+---
 
-Single LLM call (MVP). Map/reduce later for sessions over the model's context window.
+### 2. Distiller — `src/anyllm/distiller/`
 
-**Input:** normalized transcript + token budget (default 2000).
-**Output:** structured **snapshot** in the `.anyllm` markdown format (section 5.4).
+The brain. Calls an LLM to compress the transcript into a structured snapshot.
 
-The distiller's job is **fact extraction with self-assessment**. It must:
-- Extract task, status, decisions (with `Why:`), code map, failed attempts, next step, open questions.
-- Self-rate **confidence** per section: high / medium / low.
-- List what it had to omit due to budget, and what it couldn't determine from the transcript.
+**Implementation:** `distiller/distiller.py`
+- Uses OpenRouter API via the `openai` SDK (compatible base URL)
+- Default model: `gpt-4o-mini` (configurable via `OPENROUTER_MODEL`/`OPENAI_MODEL` env or `config.yaml`)
+- Priority: `OPENROUTER_API_KEY` → `OPENAI_API_KEY` → offline fallback
+- Soft input cap: 180,000 chars of rendered turns before truncation
+- Offline fallback: if no API key, produces a minimal skeleton snapshot flagged low-confidence everywhere
+- **`prompt_version` param** — `distill(transcript, project, prompt_version="v1-delta")` loads an alternate system prompt from `distiller/prompts/<version>.md` at call time. Used by `repack`.
 
-The confidence layer is the most important non-obvious piece. It's what makes the tool trustworthy instead of silently lossy.
+**Versioned system prompts:**
 
-**Distiller model:** Claude Sonnet by default (cheap, smart enough). Configurable.
+| File | Used by | Purpose |
+|---|---|---|
+| `prompts/v1.md` | `pack` | Full session distillation — all sections required |
+| `prompts/v1-delta.md` | `repack` | Delta distillation — only what changed since last pack; sections may be sparse; Task section omitted if unchanged |
 
-The distiller prompt is a versioned asset, not throwaway code. It lives in `anyllm/distiller/prompts/v1.md` and is reproducibly tested against fixture transcripts.
+**Frontmatter the distiller emits:**
+```yaml
+anyllm_version: "0.1"
+project: <name>
+generated_at: <ISO timestamp>
+distilled_from:
+  - source: claude-code
+    session_id: <id>
+    turn_count: 37
+    token_count: 12000
+budget_tokens: 2000
+distiller_model: gpt-4o-mini
+prompt_version: v1          # or v1-delta for repack
+```
 
-#### C. Storage — `.anyllm/` directory
+---
+
+### 3. Storage — `src/anyllm/storage.py` + `.anyllm/`
+
+Plain files. No database. All formats are markdown or JSON — hand-editable by design.
 
 ```
 .anyllm/
-├── config.yaml              # project config: target preferences, distill budget, model
-├── index.json               # session log (id, source, timestamp, brief summary)
-├── sessions/
-│   ├── 2026-04-19-abc123.transcript.json   # normalized raw
-│   └── 2026-04-19-abc123.snapshot.md       # distilled
-└── current.md               # rolling project-level snapshot (what `anyllm prime` reads)
+├── config.yaml                                          # project settings
+├── index.json                                           # session log
+├── current.md                                           # rolling project snapshot
+└── sessions/
+    ├── 2026-06-29-<id>.transcript.json                  # normalized raw
+    └── 2026-06-29-<id>.snapshot.md                      # distilled
 ```
 
-- Snapshots are **markdown**. The user can open and hand-edit them — this is the local-first, boring-format principle.
-- `current.md` is the canonical "what's going on right now" file. In MVP, `anyllm pack` overwrites it with the latest session's snapshot. In v2, `anyllm pack` does an LLM-assisted *merge* (supersede stale items, append new). Designing for the merge from day one means no rewrite later.
-- Per-session snapshots stay forever (cheap) so `anyllm log` / `anyllm diff` work.
+- `current.md` is what `anyllm prime` and `anyllm push` read — the canonical "what's going on now"
+- `index.json` tracks all packed sessions with merge stats; entries are never deleted
+- Project root found by walking up from cwd looking for `.anyllm/`
 
-#### D. Composer — *facts → briefing*
+**Key functions:**
+- `get_last_pack_entry(paths)` — returns the most recent entry from `index.json` (used by `repack` to get `since_ts`)
+- `append_index_entry(paths, entry)` — deduplicates by `(source, session_id)` for normal packs; entries with `"type": "repack"` are always appended without dedup
 
-This is the stage your earlier notes were missing, and it's what makes the adapter layer cheap.
+**`index.json` entry schemas:**
 
-The composer takes the snapshot (raw facts) and adds the **instructional framing** that turns it into a *briefing*:
+Pack entry:
+```json
+{
+  "source": "claude-code",
+  "session_id": "abc123",
+  "started_at": "...",
+  "ended_at": "...",
+  "last_turn_ts": "...",
+  "turn_count": 40,
+  "token_count": 12000,
+  "snapshot_path": ".anyllm/sessions/2026-06-29-abc123.snapshot.md",
+  "transcript_path": ".anyllm/sessions/2026-06-29-abc123.transcript.json",
+  "packed_at": "2026-06-29T14:00:00Z",
+  "merge": { "confirmed": 3, "added": 1, "stale": 0, "orphaned": 0 }
+}
+```
 
-- Role preamble: *"You are continuing an existing coding task..."*
-- Anti-repetition guards: *"Do NOT restart. Do NOT re-implement completed parts. Do NOT ignore prior decisions."*
-- Verification hooks for low-confidence sections: *"The following decision is marked low-confidence — verify before relying on it."*
-- The user's framing preferences from `config.yaml` (e.g. tone, extra rules they always want appended).
+Repack entry:
+```json
+{
+  "type": "repack",
+  "source": "claude-code",
+  "session_id": "abc123",
+  "since_ts": "2026-06-29T13:58:22Z",
+  "turns_ingested": 3,
+  "packed_at": "2026-06-29T15:00:00Z",
+  "last_turn_ts": "...",
+  "merge": { "confirmed": 0, "added": 1, "stale": 1, "orphaned": 0 }
+}
+```
 
-Composer output is a structured **briefing JSON** — adapter-agnostic, target-agnostic. One representation, many renderings.
+**`config.yaml` defaults:**
+```yaml
+distiller:
+  model: gpt-4o-mini
+  budget_tokens: 2000
+targets:
+  default: chatgpt
+framing:
+  extra_rules: []
+  tone: direct
+merge:
+  enabled: true
+  graphify_graph: graphify-out/graph.json
+  graphify_timeout: 30
+  stale_threshold: 3
+  auto_update_graph: true
+push:
+  browser: auto              # auto | chrome | arc | firefox | safari
+  codex_url: https://codex.openai.com
+  send_delay_ms: 500
+  open_if_missing: true
+```
 
-#### E. Adapter — *render for one target*
+---
 
-Each adapter takes the composed briefing and emits the right shape for one target. Adapters are *renderers* — no logic, no decisions, just templating.
+### 4. Merge Engine — `src/anyllm/merger.py`
 
-- **MVP:** `chatgpt` adapter. Markdown with explicit `## Context`, `## Decisions`, `## Your task`, role-framed first message, copy-pasteable.
-- **Next:** `claude` adapter (`MEMORY.md`-shaped, XML tags, structured), `cursor` adapter (`.cursorrules` file), `generic` adapter (plain text for any other LLM).
+After distillation, the new snapshot is merged into `current.md` rather than overwriting it. Both `pack` and `repack` go through the same merge path — the delta snapshot from `repack` is indistinguishable from any other snapshot at this stage.
 
-Adapters know each provider's quirks:
-- Claude → tolerates structure and length, prefers tagged sections.
-- GPT → prefers markdown with clear role framing and shorter primers.
-- Cursor → must respect `.cursorrules` size limits, code-style emphasis.
+**Decision state machine:**
+- **CONFIRMED** — decision appeared in both old and new snapshots (or graph says EXTRACTED)
+- **ADDED** — new decision not in previous snapshot
+- **UPDATED** — wording changed significantly (bigram similarity < 0.85); old version archived as Superseded
+- **STALE** — decision absent from new snapshot; graph confidence is INFERRED or AMBIGUOUS
+- **ORPHANED** — absent for `stale_threshold` sessions and graph says MISSING/AMBIGUOUS
 
-### 5.3 Why ChatGPT is the MVP target (not Claude)
+**Matching algorithm:** Jaccard bigram similarity on normalized decision text.
+- Threshold: 0.55 (text-only) or 0.40 (when code anchors match)
+- Code anchor extracted from backtick-quoted paths/symbols in decision text
 
-Tempting to target Claude first because we're already in the Claude ecosystem. Wrong call.
+**Failed Approaches and Open Questions** are always unioned across sessions (never dropped).
 
-- Within-Claude continuity is what `MEMORY.md` and `/resume` already give you for free.
-- The product's *whole reason to exist* is **cross-provider portability**.
-- The most relatable demo is: *"My Claude credits ran out — watch me finish the task in ChatGPT in 30 seconds."*
+**Frontmatter written to `current.md`:**
+```yaml
+merged_from: [<session_ids>]
+confidence_report:
+  confirmed: 3
+  added: 1
+  stale: 0
+  orphaned: 0
+decision_provenance:
+  <anchor_or_id>:
+    introduced: <session_id>
+    confirmed_in: [<session_ids>]
+    sessions_absent: 0
+    confidence: EXTRACTED
+```
 
-Build Claude → ChatGPT first. The Claude adapter is week 2.
+---
 
-### 5.4 The `.anyllm` snapshot format (v0)
+### 5. Graph Bridge — `src/anyllm/graph_bridge.py`
 
-Versioned. Markdown. Boring on purpose so it can become a standard.
+Optional integration with `graphify` (separate CLI, not a hard dependency).
+
+- Checks if `graphify` is on PATH at runtime; no-ops cleanly if not installed
+- `update_graph()` — runs `graphify extract <path> --update` (incremental)
+- `query_node_confidence()` — runs `graphify query <anchor> --graph <path> --json`
+  - Returns: `EXTRACTED` | `INFERRED` | `AMBIGUOUS` | `MISSING`
+- Graph confidence feeds the merge engine's decision state machine
+
+---
+
+### 6. Composer — `src/anyllm/composer.py`
+
+Turns the raw snapshot facts into an adapter-agnostic **briefing JSON** by adding instructional framing.
+
+Adds:
+- **Role preamble** — "You are continuing an existing coding task..."
+- **Anti-repetition guards** — "Do NOT restart. Do NOT re-implement completed parts."
+- **Verification hooks** — flags low-confidence sections for human/LLM verification
+- **User rules** from `config.yaml` (`extra_rules`, `tone`)
+
+Also enriches with graph context if a graphify graph is available (`graph_context.py`).
+
+Output is a structured dict — one representation, many adapter renderings.
+
+---
+
+### 7. Adapter — `src/anyllm/adapters/`
+
+Each adapter takes the composed briefing JSON and renders it for one target.
+
+**Implemented:** `chatgpt` — markdown with explicit role framing, `## Context` / `## Decisions` / `## Your task` structure.
+
+**Planned:** `claude` (MEMORY.md-shaped, XML tags), `cursor` (.cursorrules), `generic` (plain text).
+
+---
+
+### 8. Injector — `src/anyllm/injectors/`
+
+Platform-aware browser automation layer used by `anyllm push`. Delivers the briefing directly into the Codex browser tab without ever printing it to the terminal.
+
+**Factory:** `injectors/__init__.py`
+- `detect_platform()` → `linux_x11` | `linux_wayland` | `macos` | `windows`
+- `get_injector(platform)` → returns the right injector instance
+
+**Interface (all injectors implement):**
+- `focus_target(target, push_cfg)` — find and focus the Codex browser window; returns `True` if found
+- `open_url(url)` — open URL in default browser
+- `inject_and_send(briefing, delay_ms)` — paste briefing text and send
+
+**Platform implementations:**
+
+| File | Mechanism |
+|---|---|
+| `injectors/windows.py` | `ctypes` Win32 `EnumWindows`/`SetForegroundWindow`; `pyperclip` for clipboard; `keybd_event` for Ctrl+V + Enter |
+| `injectors/macos.py` | `osascript` to enumerate browser windows by URL; `pyperclip` + `keystroke "v"` AppleScript |
+| `injectors/linux_x11.py` | `xdotool search/windowfocus/type/key` |
+| `injectors/linux_wayland.py` | `ydotool type/key` (requires `ydotoold` daemon) |
+
+**Window detection order:**
+1. Search open windows for title containing `codex` or `openai`
+2. If not found and `open_if_missing: true` → open `codex_url`, wait 3s, retry focus
+3. If still not found → print error to stderr, exit
+
+**Silence guarantee:** the briefing string is held in memory and passed directly to the injector. It is never written to stdout or shown in the Claude Code terminal.
+
+---
+
+### 9. Push — `src/anyllm/push.py`
+
+Orchestrates the push flow:
+
+```
+push(paths, config)
+  └─ _compose_briefing()   # reads current.md → adapter primer (never printed)
+  └─ detect_platform()
+  └─ get_injector()
+  └─ injector.focus_target()
+      └─ if not found and open_if_missing: injector.open_url() → sleep(3) → retry
+  └─ injector.inject_and_send(briefing, delay_ms)
+  └─ print("✓ pushed to Codex")    # only this line appears in terminal
+```
+
+---
+
+## CLI Commands — `src/anyllm/cli.py`
+
+| Command | What it does |
+|---|---|
+| `anyllm init` | Create `.anyllm/` with default `config.yaml` and `index.json` |
+| `anyllm pack [--source] [--session]` | Ingest → Distill (v1) → Merge → write `current.md` |
+| `anyllm repack [--source]` | Ingest delta since last pack → Distill (v1-delta) → Merge → update `current.md` |
+| `anyllm push` | Compose briefing silently → find Codex tab → paste + Enter |
+| `anyllm prime [--target] [--copy] [--write]` | Compose + Adapt → emit briefing to stdout / clipboard / file |
+| `anyllm status` | Show `current.md` summary (task, next step, confidence report, graph info) |
+| `anyllm log` | Table of all packed sessions with `type` (pack/repack), turns, decisions |
+| `anyllm diff <session-id>` | Print snapshot for one session |
+
+### Slash commands (Claude Code only)
+
+Stored in `~/.claude/commands/`. Zero Claude tokens — `disable-model-invocation: true` on all.
+
+| Slash command | Runs |
+|---|---|
+| `/anyllm-init` | `anyllm init` |
+| `/anyllm-pack` | `anyllm pack $ARGUMENTS` |
+| `/anyllm-repack` | `anyllm repack $ARGUMENTS` |
+| `/anyllm-push` | `anyllm push $ARGUMENTS` |
+| `/anyllm-prime` | `anyllm prime $ARGUMENTS` |
+| `/anyllm-status` | `anyllm status` |
+
+---
+
+## Snapshot Format (v0.1)
+
+Versioned markdown. Boring on purpose — meant to become a standard.
 
 ```markdown
 ---
-anyllm_version: 0.1
-project: multiagent
-generated_at: 2026-04-19T14:30:00Z
-distilled_from:
-  - source: claude-code
-    session_id: abc123
-    turn_count: 142
-    token_count: 48230
-budget_tokens: 2000
-distiller_model: claude-sonnet-4-6
+anyllm_version: "0.1"
+project: myproject
+generated_at: 2026-06-29T12:00:00Z
+# ... (merge metadata after first merge)
 ---
 
 # Task
 <one paragraph: what the user is trying to accomplish>
 
 # Status
-<where things stand right now — what's done, what's in progress>
+<what's done, what's in progress>
 
 # Decisions
 - <decision>. **Why:** <rationale>. _conf: high_
-- <decision>. **Why:** <rationale>. _conf: medium_
 
 # Code map
-- `path/to/file.py` — <one line: what it does / what changed>
-  ```python
-  # only the lines the next session needs
-  ```
+- `path/to/file.py` — what it does
 
 # Tried & failed
 - <approach> — failed because <reason>. Don't redo.
 
 # Next step
-<one concrete action the next session should take first>
+<one concrete action>
 
 # Open questions
-- <question that needs the user>
+- <question>
 
 # Confidence Report
 - Overall: medium
 - High confidence: task, decisions, next step
-- Medium confidence: code map (some files inferred from tool calls, not read)
-- Low confidence: <none>
-- Omitted (budget): early debugging exploration of `legacy/old_auth.py`
-- Could not determine: whether the user wants to keep backward compatibility with v1 tokens
+- Low confidence: code map (some files inferred)
 ```
 
-The **Confidence Report** is non-negotiable. It's the trust mechanism.
+---
 
-### 5.5 Key flows
+## Data Flow Diagrams
 
-**Flow 1 — Pack.**
-`anyllm pack` →
-1. Find the most recent session for this project (via configured ingestors).
-2. Normalize → `sessions/<id>.transcript.json`.
-3. Distill → `sessions/<id>.snapshot.md`.
-4. Update `current.md` (MVP: copy. v2: LLM-assisted merge).
-5. Append entry to `index.json`.
+### `anyllm pack`
 
-**Flow 2 — Prime.**
-`anyllm prime --target chatgpt [--copy] [--write PATH]` →
-1. Read `current.md`.
-2. Compose into briefing JSON (add role framing, anti-repetition guards, verification hooks).
-3. Render via `chatgpt` adapter.
-4. Print to stdout (default), copy to clipboard (`--copy`), or write to file (`--write`).
+```
+anyllm pack
+    │
+    ├─ ClaudeCodeIngestor.latest_session(root)
+    │       reads ~/.claude/projects/<slug>/*.jsonl (most recent by mtime)
+    │       → NormalizedTranscript
+    │
+    ├─ storage.write_transcript()
+    │       → .anyllm/sessions/<date>-<id>.transcript.json
+    │
+    ├─ Distiller.distill(transcript, project)            # prompt: v1.md
+    │       → POST openrouter.ai/api/v1/chat/completions
+    │       → snapshot markdown
+    │
+    ├─ storage.write_snapshot()
+    │       → .anyllm/sessions/<date>-<id>.snapshot.md
+    │
+    ├─ [if merge.enabled]
+    │   ├─ graph_bridge.update_graph()   (optional, if graphify installed)
+    │   └─ MergeEngine.merge(prev_current, new_snapshot)
+    │           → MergeResult (confirmed, added, stale, orphaned, merged_md)
+    │           → .anyllm/current.md
+    │
+    └─ storage.append_index_entry()      # type: pack, includes last_turn_ts
+            → .anyllm/index.json
+```
 
-**Flow 3 — Auto-pack on session end** (post-MVP).
-A Claude Code `Stop` hook that runs `anyllm pack` automatically when a session ends. Zero-friction capture.
+### `anyllm repack`
+
+```
+anyllm repack
+    │
+    ├─ storage.get_last_pack_entry()
+    │       reads last entry from index.json
+    │       → { session_id, last_turn_ts, ... }
+    │
+    ├─ ClaudeCodeIngestor.session_by_id(root, session_id, since_ts=last_turn_ts)
+    │       re-reads same JSONL, filters turns where ts > last_turn_ts
+    │       → NormalizedTranscript (delta only)
+    │
+    │   if transcript.turns == [] → exit "Nothing to repack"
+    │
+    ├─ Distiller.distill(transcript, project, prompt_version="v1-delta")
+    │       → delta snapshot markdown (sparse sections OK)
+    │
+    ├─ [if merge.enabled]
+    │   └─ MergeEngine.merge(prev_current, delta_snapshot)
+    │           → updates current.md in place
+    │
+    └─ storage.append_index_entry()      # type: repack, includes since_ts + turns_ingested
+            → .anyllm/index.json         # no dedup — both pack + repack entries are kept
+```
+
+### `anyllm push`
+
+```
+anyllm push
+    │
+    ├─ compose_briefing(paths, config)
+    │       parse_snapshot(current.md) → compose() → adapter.render()
+    │       briefing string held in memory, never printed
+    │
+    ├─ detect_platform()      # win32 | macos | linux_x11 | linux_wayland
+    ├─ get_injector(platform)
+    │
+    ├─ injector.focus_target("codex", push_cfg)
+    │       windows: ctypes EnumWindows → SetForegroundWindow
+    │       macos:   osascript enumerate windows by URL
+    │       linux:   xdotool search --name codex
+    │       if not found and open_if_missing → open_url(codex_url) → sleep(3) → retry
+    │
+    ├─ injector.inject_and_send(briefing, delay_ms=500)
+    │       windows: pyperclip.copy() → keybd_event(Ctrl+V) → keybd_event(Enter)
+    │       macos:   pyperclip.copy() → osascript keystroke "v" → key code 36
+    │       linux:   xdotool type -- <briefing> → xdotool key Return
+    │
+    └─ print("✓ pushed to Codex")     # only terminal output
+```
+
+### `anyllm prime`
+
+```
+anyllm prime
+    │
+    ├─ parse_snapshot(current.md)
+    ├─ compose(snapshot, target, extra_rules, tone)
+    │       → briefing JSON (adapter-agnostic)
+    ├─ [if graphify graph exists] graph_context.enrich_briefing()
+    └─ ChatGPTAdapter.render(briefing)
+            → markdown primer → stdout / clipboard / file
+```
 
 ---
 
-## 6. Differentiation
+## Key Design Decisions
 
-| Tool             | Audience            | Cross-provider  | Open  | Confidence-aware  | Lightweight  |
-|------------------|---------------------|-----------------|-------|-------------------|--------------|
-| mem0             | App developers      | N/A (SDK)       | Yes   | No                | Medium       |
-| Letta/MemGPT     | App developers      | N/A (SDK)       | Yes   | No                | Heavy        |
-| Zep              | App developers      | N/A (SDK)       | Partial | No              | Heavy        |
-| Pieces           | End-user devs       | Some            | No    | No                | Heavy        |
-| Claude MEMORY.md | Claude Code only    | No              | N/A   | No                | Yes          |
-| Cursor rules     | Cursor only         | No              | N/A   | No                | Yes          |
-| **anyllm (this)**   | **End-user devs**   | **Yes (core)**  | **Yes** | **Yes**         | **Yes**      |
-
-Defensible wedge: **cross-provider portability + a published protocol spec + a confidence-aware briefing model**. If `.anyllm` is good, other tools could adopt the format natively, the same way `.editorconfig` got picked up.
-
----
-
-## 7. Build Plan — 1 Week MVP
-
-| Day | Work |
-|-----|------|
-| 1   | Repo scaffold (Python + typer). `.anyllm/` layout. `anyllm init`. Read fixture Claude Code JSONL transcripts; output normalized JSON. |
-| 2   | Finish `claude-code` ingestor on real transcripts. Write 3–5 test fixtures of varying length. |
-| 3   | Distiller v1: single-pass prompt, Claude Sonnet, 2k token budget. Output the snapshot format including Confidence Report. |
-| 4   | Composer + `chatgpt` adapter. `anyllm prime --target chatgpt`. End-to-end smoke test. |
-| 5   | Demo run: take a real 30–60 min Claude Code session, pack it, prime ChatGPT, watch ChatGPT continue correctly. Iterate the distiller prompt based on failures. |
-| 6   | `anyllm status`, `anyllm log`, `--copy`, `--write`. Polish CLI. Write a 60-second README demo. |
-| 7   | Buffer + record demo video. |
-
-### Then — week 2 onward
-
-- `claude` adapter (`MEMORY.md`-shaped output).
-- `cursor` adapter.
-- `clipboard` ingestor for any web LLM.
-- The benchmark (next section). This is the secret weapon — don't skip.
-
----
-
-## 8. The Benchmark — *the secret weapon*
-
-Build a small evaluation harness in week 2:
-
-- **Inputs:** ~10 canned coding sessions, each cut at the 80% mark (transcripts you've collected from real work).
-- **Procedure:** for each, run `anyllm pack` → `anyllm prime --target X` → feed primer to a fresh LLM session → ask it to complete the task.
-- **Measure:**
-  - **Resumption fidelity** — did it complete the task without re-asking the user for already-decided things?
-  - **No-redo rate** — did it avoid re-implementing finished work?
-  - **Token efficiency** — primer tokens / original transcript tokens.
-- **Report per (adapter, distiller model, token budget) combination.**
-
-Why this matters:
-- Nobody else has this benchmark.
-- It gives you a publishable artifact: *"Task-Resumption Fidelity: A Benchmark for Cross-Provider LLM Context Handoff."*
-- It keeps you honest while iterating the distiller prompt.
-
-This single benchmark is what turns the project from "cool weekend hack" into something a staff engineer or recruiter takes seriously.
-
----
-
-## 9. Tech Stack
-
-- **Language:** Python (richest LLM ecosystem, fastest to ship).
-- **CLI:** `typer`.
-- **LLM clients:** `anthropic` SDK + `openai` SDK; distiller model swappable via `config.yaml`.
-- **Storage:** plain files. No DB. Snapshots are markdown — users can hand-edit.
-- **Testing:** `pytest` + recorded transcript fixtures so distillation is reproducible.
-- **Clipboard:** `pyperclip` (cross-platform).
-
----
-
-## 10. Risks & Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| Distillation quality is everything; bad primers = useless tool | The benchmark (section 8) keeps you honest. Start by hand-writing a perfect snapshot for one real session — if a hand-written one doesn't resume the task, the format is wrong. Fix the format before writing code. |
-| Provider format churn (Claude `MEMORY.md` shape changes, etc.) | Adapters are small/swappable; protocol stays stable. |
-| "Just paste the transcript yourself" objection | Only earns its keep on long sessions. Lead the demo with a 50k-token session that won't fit in ChatGPT's context. |
-| Privacy — transcripts contain code and secrets | Local-first, no cloud, document this loudly in the README. |
-| Hallucinated decisions from the distiller | Confidence Report. Every claim is rated; low-confidence items get an explicit "verify before relying" framing in the composed briefing. |
-| Scope creep | Section 11 below. Hold the line. |
-
----
-
-## 11. Out of Scope (for MVP)
-
-Discipline matters. None of these in week 1:
-
-- Multiple ingestors (just `claude-code`).
-- Multiple adapters (just `chatgpt`).
-- Map/reduce distillation pipeline.
-- Auto-pack hooks.
-- Smart `current.md` merge logic.
-- Web UI / GUI.
-- Vector search / semantic retrieval over old sessions.
-- Multi-project knowledge base.
-
-If a feature isn't required to make the demo in section 7 land, it doesn't ship in week 1.
-
----
-
-## 12. Resume Narrative
-
-> Built **anyllm**, an open-source CLI and protocol for portable LLM session context. Solves the credit-exhaustion handoff problem when developers move between Claude, ChatGPT, and Cursor mid-task. Designed a versioned `.anyllm` snapshot format with built-in confidence reporting, a distillation pipeline that compresses 50k-token transcripts into 2k-token instructional briefings, and per-provider adapters. Built a **task-resumption fidelity benchmark** — the first of its kind for this problem — and used it to tune the distiller from X% to Y% accuracy across providers.
-
-The benchmark line is what makes a recruiter or staff engineer stop scrolling.
-
----
-
-## 13. Decisions Locked
-
-- **Name:** `anyllm`
-- **Language:** Python
-- **MVP target path:** Claude Code → ChatGPT
-- **Repo visibility:** private until MVP works end-to-end and the demo is recorded; open-source after.
+| Decision | Rationale |
+|---|---|
+| OpenRouter for distillation (not direct Anthropic/OpenAI) | One API key, model-agnostic, free tier available |
+| Default model `gpt-4o-mini` | Fast and cheap; swap via env var or config |
+| `v1-delta` prompt for repack | Full-session prompt on 3 turns produces waffle; delta prompt produces sparse, accurate output that merges cleanly |
+| `since_ts` filter in ingestor (not a separate file) | The JSONL file is append-only; filtering in-process avoids stale transcript copies |
+| Repack entries not deduplicated in index.json | Both the original pack and all repacks are preserved as a complete audit trail |
+| Merge engine used for both pack and repack | No special-casing needed; the merge engine doesn't care whether the incoming snapshot is a full distillation or a delta |
+| `ctypes` for Windows window focus (not pywin32) | No extra pip dependency for the most common case; pywin32 available as `[push]` optional extra |
+| Push briefing never touches stdout | Claude Code captures stdout for context; printing the briefing would leak it back into the Claude context, breaking the "0 token" contract |
+| Plain markdown for all snapshots | Hand-editable, diff-friendly, no lock-in |
+| Offline fallback in distiller | `anyllm pack` never hard-fails; low-confidence skeleton better than nothing |
+| `chatgpt` adapter first (not `claude`) | Cross-provider portability is the whole value proposition |
