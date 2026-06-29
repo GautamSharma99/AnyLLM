@@ -157,29 +157,21 @@ def pack(
 
     snapshot_path = write_snapshot(paths, transcript, snapshot_md)
 
-    # --- Merge step (new) ---
+    # --- Merge step ---
     merge_cfg = config.merge
+    ra_cfg = config.repository_analysis
     sid = transcript.get("session_id", "")
     merge_result = None
 
     if merge_cfg.enabled:
-        # Optionally update the graphify graph before merging
-        graph_path: str | None = None
-        graph_query_fn = None
-        if merge_cfg.auto_update_graph:
-            from .graph_bridge import graphify_available, update_graph
-            if graphify_available():
-                console.print("[dim]updating graphify graph...[/dim]")
-                update_graph(str(paths.root), timeout=merge_cfg.graphify_timeout)
+        from .context_graph import RepositoryAnalyzer
+        analyzer = RepositoryAnalyzer(paths.root, timeout=ra_cfg.timeout)
 
-        # Set up graph query function if graph exists
-        resolved_graph = paths.root / merge_cfg.graphify_graph
-        if resolved_graph.exists():
-            graph_path = str(resolved_graph)
-            from .graph_bridge import make_graph_query_fn
-            graph_query_fn = make_graph_query_fn(
-                graph_path, timeout=merge_cfg.graphify_timeout
-            )
+        if ra_cfg.enabled and ra_cfg.auto_refresh:
+            analyzer.analyze()
+
+        graph_query_fn = analyzer.resolve_symbol if analyzer.available() else None
+        graph_path: str | None = str(analyzer.graph_path) if analyzer.available() else None
 
         current_path, merge_result = write_merged_current(
             paths,
@@ -267,16 +259,12 @@ def prime(
         tone=config.tone,
     )
 
-    # Enrich with graph context if available
-    merge_cfg = config.merge
-    resolved_graph = paths.root / merge_cfg.graphify_graph
-    if resolved_graph.exists():
-        from .graph_context import enrich_briefing
-        briefing = enrich_briefing(
-            briefing,
-            str(resolved_graph),
-            timeout=merge_cfg.graphify_timeout,
-        )
+    # Enrich with repository context if available
+    if config.repository_analysis.enabled:
+        from .context_graph import RepositoryAnalyzer
+        briefing = RepositoryAnalyzer(
+            paths.root, timeout=config.repository_analysis.timeout
+        ).enrich_briefing(briefing)
 
     primer = adapter_cls().render(briefing)
 
@@ -337,23 +325,18 @@ def status() -> None:
             f"{stale_count} stale, {orphaned_count} orphaned"
         )
 
-    # Graph info
-    merge_cfg = config.merge
-    resolved_graph = paths.root / merge_cfg.graphify_graph
-    if resolved_graph.exists():
-        from .graph_bridge import graph_mtime
-        mtime = graph_mtime(str(resolved_graph))
-        console.print(f"  Graph: {merge_cfg.graphify_graph} (last updated: {mtime or '?'})")
+    # Repository analysis availability
+    if config.repository_analysis.enabled:
+        from .context_graph import RepositoryAnalyzer
+        analyzer = RepositoryAnalyzer(paths.root, timeout=config.repository_analysis.timeout)
+        if analyzer.available():
+            from .context_graph._extractor import _last_updated
+            mtime = _last_updated(str(analyzer.graph_path))
+            console.print(f"  Repository analysis: [green]available[/green] (last updated: {mtime or '?'})")
+        else:
+            console.print("  Repository analysis: [dim]unavailable[/dim]")
     else:
-        console.print(f"  Graph: {merge_cfg.graphify_graph} (not found)")
-
-    # graphify availability
-    from .graph_bridge import graphify_available, graphify_version
-    if graphify_available():
-        ver = graphify_version() or "unknown version"
-        console.print(f"  graphify: installed ({ver})")
-    else:
-        console.print("  graphify: [dim]not installed[/dim]")
+        console.print("  Repository analysis: [dim]disabled[/dim]")
 
     console.print()
 
@@ -513,19 +496,15 @@ def repack(
         raise typer.Exit(code=1)
 
     merge_cfg = config.merge
+    ra_cfg = config.repository_analysis
     sid = transcript.get("session_id", "")
     merge_result = None
 
     if merge_cfg.enabled:
-        graph_path: str | None = None
-        graph_query_fn = None
-        resolved_graph = paths.root / merge_cfg.graphify_graph
-        if resolved_graph.exists():
-            graph_path = str(resolved_graph)
-            from .graph_bridge import make_graph_query_fn
-            graph_query_fn = make_graph_query_fn(
-                graph_path, timeout=merge_cfg.graphify_timeout
-            )
+        from .context_graph import RepositoryAnalyzer
+        analyzer = RepositoryAnalyzer(paths.root, timeout=ra_cfg.timeout)
+        graph_query_fn = analyzer.resolve_symbol if analyzer.available() else None
+        graph_path: str | None = str(analyzer.graph_path) if analyzer.available() else None
 
         current_path, merge_result = write_merged_current(
             paths,
