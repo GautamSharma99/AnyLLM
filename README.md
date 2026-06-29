@@ -2,6 +2,9 @@
 
 > *Git for LLM context.* Snapshot a dying session, brief the next model in 30 seconds, anywhere.
 
+<img width="774" height="277" alt="image" src="https://github.com/user-attachments/assets/9fdfee65-a851-4605-9425-49071c8b5dd9" />
+
+
 You researched the architecture in ChatGPT. Now you need Claude to write the code. Explaining it all over again wastes ten minutes — and even then, the second model misses half the decisions you already made.
 
 **anyllm** solves this. It distills a long LLM session into a compact, instructional briefing you can paste into any other model — ChatGPT, Claude, Cursor, a fresh tab — and pick up exactly where you left off, without re-litigating finished work.
