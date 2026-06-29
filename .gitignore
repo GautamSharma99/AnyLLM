@@ -11,3 +11,4 @@ dist/
 .anyllm/index.json
 .claude
 .anyllm
+.env

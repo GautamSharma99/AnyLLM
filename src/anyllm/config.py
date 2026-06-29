@@ -9,7 +9,7 @@ import yaml
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "distiller": {
-        "model": "claude-sonnet-4-6",
+        "model": "gpt-4o-mini",
         "budget_tokens": 2000,
     },
     "targets": {
@@ -41,7 +41,7 @@ class MergeConfig:
 
 @dataclass
 class Config:
-    distiller_model: str = "claude-sonnet-4-6"
+    distiller_model: str = "gpt-4o-mini"
     budget_tokens: int = 2000
     default_target: str = "chatgpt"
     extra_rules: list[str] = field(default_factory=list)

@@ -1,5 +1,5 @@
 distiller:
-  model: claude-sonnet-4-6
+  model: gpt-4o-mini
   budget_tokens: 2000
 targets:
   default: chatgpt
@@ -7,8 +7,8 @@ framing:
   extra_rules: []
   tone: direct
 merge:
-  enabled: true                    # set false to revert to clobber behavior
-  graphify_graph: graphify-out/graph.json   # relative to project root
-  graphify_timeout: 30             # seconds; 0 = no timeout
-  stale_threshold: 3               # sessions a decision can be absent before -> ORPHANED
-  auto_update_graph: true          # run graphify extract --update before merging
+  enabled: true
+  graphify_graph: graphify-out/graph.json
+  graphify_timeout: 30
+  stale_threshold: 3
+  auto_update_graph: true
