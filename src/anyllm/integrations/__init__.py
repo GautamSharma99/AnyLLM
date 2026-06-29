@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .agy import AgyIntegration
 from .claude import ClaudeIntegration
 from .codex import CodexIntegration
 from .cursor import CursorIntegration
@@ -18,7 +17,6 @@ ALL_INTEGRATIONS: list = [
     KiroIntegration(),
     KiloIntegration(),
     CursorIntegration(),
-    AgyIntegration(),
 ]
 
 _BY_KEY = {i.key: i for i in ALL_INTEGRATIONS}

@@ -155,7 +155,13 @@ def _skill_dir_install(base_dir: Path, commands: list[tuple[str, str, str]], tem
     for slug, cmd, description in commands:
         skill_dir = base_dir / slug
         skill_dir.mkdir(exist_ok=True)
-        content = template.format(slug=slug, cmd=cmd, description=description, scope=scope)
+        try:
+            content = template.format(
+                slug=slug, cmd=cmd, description=description,
+                description_lower=description.lower(), scope=scope,
+            )
+        except KeyError:
+            content = template.format(slug=slug, cmd=cmd, description=description, scope=scope)
         _write_file(skill_dir / "SKILL.md", content)
 
 

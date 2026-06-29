@@ -13,12 +13,12 @@ from .base import (
 _SKILL_TEMPLATE = """\
 ---
 name: {slug}
-description: |
-  anyllm — {description}
-  Triggered when the user types /{slug}.
+description: >
+  Activate this skill when the user mentions "{slug}" or asks to {description_lower}.
+  Also activate when the user types "{slug}" as a message.
 ---
 
-Run the following shell command and display its output to the user:
+Run the following shell command exactly as shown and display its output to the user:
 
 ```bash
 {cmd}
@@ -29,12 +29,16 @@ Do not add any extra commentary. Run the command and show the result.
 
 
 class GeminiIntegration(CLIIntegration):
-    """Gemini CLI (Antigravity) — global: ~/.gemini/config/skills/  project: .agents/skills/"""
+    """Antigravity / Agy CLI — global: ~/.gemini/config/skills/  project: .agents/skills/
 
-    name = "Gemini"
+    Agy (agy.exe) IS the Antigravity CLI. Skills are AI-triggered context documents,
+    not slash commands. Users type the skill name as a plain message (no / prefix).
+    """
+
+    name = "Antigravity"
     key = "gemini"
-    command_style = "slash"
-    binaries = ["gemini", "antigravity"]
+    command_style = "message"
+    binaries = ["gemini", "antigravity", "agy"]
     config_dirs = [Path.home() / ".gemini"]
 
     @property
@@ -46,8 +50,10 @@ class GeminiIntegration(CLIIntegration):
         return Path.cwd() / ".agents" / "skills"
 
     def _render_command(self, slug: str, cmd: str, description: str, scope: str = SCOPE_GLOBAL) -> tuple[str, str]:
-        # For skill-dir integrations we return the dir name; actual writing is in install()
-        return slug, _SKILL_TEMPLATE.format(slug=slug, cmd=cmd, description=description, scope=scope)
+        return slug, _SKILL_TEMPLATE.format(
+            slug=slug, cmd=cmd, description=description,
+            description_lower=description.lower(), scope=scope,
+        )
 
     def install(self, scope: str = SCOPE_GLOBAL) -> None:
         d = self.project_install_dir if scope == SCOPE_PROJECT else self.global_install_dir
